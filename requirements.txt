@@ -1,0 +1,4 @@
+pyyaml
+prest>=0.3
+netaddr
+python-keystoneclient
