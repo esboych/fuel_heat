@@ -1,0 +1,27 @@
+name: disk-io-cluster
+deployment_mode: multinode
+net_provider: neutron_vlan
+libvirt_type: kvm
+release: "1"
+
+network:
+    public:
+        ip_ranges: 172.16.55.130 - 172.16.55.144
+        cidr: 172.16.55.128/26
+        gateway: 172.16.55.129
+    management:
+        vlan: 201
+    storage:
+        vlan: 202
+
+    vlan_range: [204, 208]
+
+    floating: 172.16.55.145 - 172.16.55.159
+    net_l23_provider: ovs
+    net_manager: VlanManager
+
+nodes:
+    - controller + ceph-osd, 1
+    - compute + ceph-osd, 1
+
+max_nodes: 6

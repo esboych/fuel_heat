@@ -1,4 +1,6 @@
 #!/usr/bin/env python2
+import json
+import os
 import sys
 import time
 import urllib2
@@ -7,7 +9,7 @@ import itertools
 import collections
 from functools import wraps
 from argparse import ArgumentParser
-
+import paramiko
 
 import yaml
 import prest
@@ -127,6 +129,8 @@ class Node(prest.PRestBase):
     get_info = prest.GET('/api/nodes/{id}')
     get_interfaces = prest.GET('/api/nodes/{id}/interfaces')
     update_interfaces = prest.PUT('/api/nodes/{id}/interfaces')
+    get_disks = prest.GET('/api/nodes/{id}/disks')
+    update_disks = prest.PUT('/api/nodes/{id}/disks')
 
     def set_network_assigment(self, mapping):
         """Assings networks to interfaces
@@ -190,6 +194,18 @@ class Node(prest.PRestBase):
                         except KeyError:
                             return netaddr.IPNetwork(net['ip']).ip
         raise Exception('Network %s not found' % network)
+
+    def update_disk_volumes(self, disks):
+        old_disks = self.get_disks()
+
+
+        for i in range(len(disks)):
+            old_disk = old_disks[i]
+            new_disk = disks[i]
+            old_disk["volumes"] = new_disk["volumes"]
+
+        self.update_disks(old_disks, id=self.id)
+
 
 
 class Cluster(prest.PRestBase):
@@ -496,7 +512,7 @@ def match_nodes(conn, cluster, max_nodes=None):
             if cpu_disk == [] or selected_nodes == max_nodes:
                 break
 
-            name = make_name(node_group, nums[id(node_group)])
+            name = make_name(node_group, nums)
             nums[id(node_group)] += 1
             descr = {'roles': node_group.roles,
                      'name': name}
@@ -620,11 +636,12 @@ def parse_command_line(argv):
                         dest="auth", default='admin:admin:admin')
 
     parser.add_argument('-u', '--fuelurl', help="fuel rest url",
-                        dest='fuelurl', required=True)
+                        dest='fuelurl', required=True, default="http://172.16.52.112:8000")
 
     parser.add_argument('config_file',
                         help='yaml configuration file',
-                        metavar="CLUSTER_CONFIG")
+                        metavar="CLUSTER_CONFIG",
+                        default="config.yaml")
 
     parser.add_argument('-d', '--debug',
                         help='allow debug logging',
@@ -652,6 +669,7 @@ def main(argv=None):
 
     conn = login(args.fuelurl, args.auth)
     cluster = yaml.load(open(args.config_file).read())
+
     fuel = FuelInfo(conn)
 
     for cluster_obj in fuel.clusters:
@@ -660,7 +678,22 @@ def main(argv=None):
             wd = with_timeout(60, "Wait cluster deleted")
             wd(lambda co: not co.check_exists())(cluster_obj)
 
-    create_cluster(conn, cluster)
+    c = create_cluster(conn, cluster)
+    c.start_deploy()
+    c.wait_operational(60*60*60*1000)
+
+    nodes = [node for node in c.nodes]
+
+    for i in range(len(nodes)):
+        node_desc = cluster["disks"][i]
+        node = nodes[i]
+        value = node_desc.values()[0]
+
+        if value == "n/a":
+            pass
+        else:
+            print value
+            node.update_disk_volumes(value)
 
     return 0
 
