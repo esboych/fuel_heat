@@ -24,4 +24,26 @@ nodes:
     - controller + ceph-osd, 1
     - compute + ceph-osd, 1
 
+disks:
+  - node1: "n/a"
+
+  - node2:
+      - volumes:
+            - name: "os"
+              size: 675840
+            - name: "vm"
+              size: 0
+
+      - volumes:
+            - name: "os"
+              size: 0
+
+            - name: "vm"
+              size: 65535
+
+  - node3: "n/a"
+
+  - node4: "n/a"
+
+
 max_nodes: 6
