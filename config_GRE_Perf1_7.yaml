@@ -1,0 +1,49 @@
+name: perf-1
+deployment_mode: ha_compact
+net_provider: neutron
+net_segment_type: tun
+libvirt_type: kvm
+release: "2"
+
+network:
+    public:
+        ip_ranges: 172.16.53.2 - 172.16.53.16
+        cidr: 172.16.53.0/26
+        gateway: 172.16.53.1
+    management:
+        vlan: 101
+    storage:
+        vlan: 102
+
+    floating: 172.16.53.17 - 172.16.53.31
+    net_l23_provider: ovs
+
+nodes:
+    - controller, 1
+    - compute, 1
+    - compute, 1
+
+
+disks:
+  - node1: "n/a"
+
+  - node2:
+      - volumes:
+            - name: "os"
+              size: 675840
+            - name: "vm"
+              size: 0
+
+      - volumes:
+            - name: "os"
+              size: 0
+
+            - name: "vm"
+              size: 65535
+
+  - node3: "n/a"
+
+  - node4: "n/a"
+
+
+max_nodes: 6

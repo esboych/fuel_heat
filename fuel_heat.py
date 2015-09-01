@@ -211,6 +211,8 @@ class Node(prest.PRestBase):
 class Cluster(prest.PRestBase):
     """Class represents Cluster in Fuel"""
 
+    networks = {}  #j: dict with nets and their ids
+
     add_node_call = prest.PUT('api/nodes')
     start_deploy = prest.PUT('api/clusters/{id}/changes')
     get_status = prest.GET('api/clusters/{id}')
@@ -218,6 +220,13 @@ class Cluster(prest.PRestBase):
     get_tasks_status = prest.GET("api/tasks?cluster_id={id}")
     get_networks = prest.GET(
         'api/clusters/{id}/network_configuration/{net_provider}')
+
+    #j: get Fuel release
+    get_releases = prest.GET(
+        'api/releases')
+    #j: getting interfaces info
+    get_interfaces = prest.GET(
+        'api/nodes/{id}/interfaces')
 
     get_attributes = prest.GET(
         'api/clusters/{id}/attributes')
@@ -227,6 +236,10 @@ class Cluster(prest.PRestBase):
 
     configure_networks = prest.PUT(
         'api/clusters/{id}/network_configuration/{net_provider}')
+
+    #j: putting interfaces info
+    configure_interfaces = prest.PUT(
+        'api/nodes/{id}/interfaces')
 
     _get_nodes = prest.GET('api/nodes?cluster_id={id}')
 
@@ -256,6 +269,12 @@ class Cluster(prest.PRestBase):
         :param roles: roles to assign
         :param interfaces: mapping iface name to networks
         """
+
+        #j: add Node
+        print "Adding Node #", node.id, ",roles: ", roles, "mac", node.mac
+
+        controller_macs = ['0c:c4:7a:03:c8:3a']
+
         data = {}
         data['pending_roles'] = roles
         data['cluster_id'] = self.id
@@ -365,21 +384,43 @@ def create_empty_cluster(conn, cluster_desc,
     data['mode'] = cluster_desc.get('deployment_mode')
 
     net_prov = cluster_desc.get('net_provider')
+    net_segment_type = cluster_desc.get('net_segment_type')
+
+
     if net_prov == "neutron_vlan":
         data['net_provider'] = "neutron"
         data['net_segment_type'] = 'vlan'
+    #j: added Nova case
+    if net_prov == "nova_network":
+        data['net_provider'] = "nova_network"
+
     else:
         data['net_provider'] = net_prov
+        data['net_segment_type'] = net_segment_type
+
+    #j: check what sent to api/clusters:
+    print "POST api/clusters:", data
 
     params = conn.post(path='/api/clusters', params=data)
     cluster = Cluster(conn, **params)
 
+    #j: check what response api/clusters:
+    print "POST api/clusters response:", params
+
     attributes = cluster.get_attributes()
+    print "Attributes are:", attributes
 
     ed_attrs = attributes['editable']
+    print "Attributes edited 1"
 
     ed_attrs['common']['libvirt_type']['value'] = \
         cluster_desc.get('libvirt_type', 'kvm')
+    print "Attributes edited 2"
+
+    #j: define provision type: "image"(IBP) or "cobbler"(Classic)
+    print "Provision type is:", cluster_desc.get('provision')
+    #ed_attrs['provision']['method']['value'] = cluster_desc.get('provision') #27.08.2015 helped but?? neede to explore
+
 
     if use_ceph:
         opts = ['ephemeral_ceph', 'images_ceph', 'images_vcenter']
@@ -396,20 +437,24 @@ def create_empty_cluster(conn, cluster_desc,
                     val['value'] = True
                 else:
                     val['value'] = False
-
+    print "Setting attributes"
     cluster.set_attributes(attributes)
+    print "Setting attributes done"
+    print "New config data is:", cluster.get_attributes()
 
     return cluster
 
 
 NodeGroup = collections.namedtuple('Node', ['roles', 'num', 'num_modif'])
-RawNodeInfo = collections.namedtuple('RawNodeInfo', ['cpu', 'disk', 'node'])
+RawNodeInfo = collections.namedtuple('RawNodeInfo', ['cpu', 'disk', 'mac', 'node']) #j: added 'mac' parameter
 
 
 def match_nodes(conn, cluster, max_nodes=None):
     node_groups = []
 
     for node_group in cluster:
+        #j:
+        print " match_nodes(conn, cluster, max_nodes=None), node group:", node_group
         rroles, rcount = node_group.split(",")
 
         rroles = rroles.strip()
@@ -434,6 +479,9 @@ def match_nodes(conn, cluster, max_nodes=None):
     controller_only = sum(node_group.num for node_group in node_groups
                           if ['controller'] == node_group.roles)
 
+    #j:
+    print " controller_only:", controller_only
+
     while True:
         raw_nodes = [raw_node for raw_node in get_all_nodes(conn)
                      if raw_node.cluster is None]
@@ -445,6 +493,9 @@ def match_nodes(conn, cluster, max_nodes=None):
             continue
         break
 
+    #j:
+    print " raw nodes:" , conn.get('api/nodes')
+
     if len(raw_nodes) <= 1:
         raise ValueError("Nodes amount should be not less, than 2")
 
@@ -452,25 +503,63 @@ def match_nodes(conn, cluster, max_nodes=None):
     for raw_node in raw_nodes:
         info = raw_node.get_info()
 
+        #j:
+        print "raw node info, Mac:", info['mac'], ", Name: ", info['name'], "Interfaces:", info['meta']['interfaces'][0]
+
         cpu_count = int(info['meta']['cpu']['real'])
+        mac = str(info['mac'])
         disk_size = 0
 
         for disk in info['meta']['disks']:
             disk_size += int(disk['size'])
 
-        cpu_disk.append(RawNodeInfo(cpu_count, disk_size, raw_node))
+        cpu_disk.append(RawNodeInfo(cpu_count, disk_size, mac, raw_node))
 
     cpu_disk.sort()
 
+    #j:
+    print "cpu_disk", cpu_disk
+
     # least performant node - controllers
+    """
     for idx, node_info in enumerate(cpu_disk[:controller_only]):
+        print "idx, node_info:", idx, node_info   #j
+        descr = {'roles': ["controller"],
+                 'name': "controller_{}".format(idx)}
+        yield (descr, node_info.node)
+        """
+
+    #j: list with Controllers only:
+    ctrlr_cpu_disk = [node_info for node_info in cpu_disk
+        #if node_info.mac == '00:50:56:92:18:cb'] #vEnv1.1
+        #if node_info.mac == '0c:c4:7a:03:c8:3a'] #Perf2
+        if node_info.mac == '0c:c4:7a:0c:92:f6'] #Perf1
+
+    #j: list without Controllers -> only Computes:
+    cpu_disk = [node_info for node_info in cpu_disk
+        #if node_info.mac != '00:50:56:92:18:cb']  #vEnv1.1
+        #if node_info.mac != '0c:c4:7a:03:c8:3a'] #Perf2
+        if node_info.mac != '0c:c4:7a:0c:92:f6'] #Perf1
+
+    print "ctrlr_cpu_disk", ctrlr_cpu_disk #j:
+
+    for idx, node_info in enumerate(ctrlr_cpu_disk):
+        #print "idx, node_info:", idx, node_info   #j
         descr = {'roles': ["controller"],
                  'name': "controller_{}".format(idx)}
         yield (descr, node_info.node)
 
-    cpu_disk = cpu_disk[controller_only:]
+    #cpu_disk = cpu_disk[controller_only:]  #j: will break the logic
     non_c_node_groups = [node_group for node_group in node_groups
                          if ['controller'] != node_group.roles]
+
+    #j:
+    print " non_c_node_groups:", non_c_node_groups
+
+
+    #j: to interrupt Cluster completeion
+    print "raw node info: break!!", info
+    #print "raw node info, mac:", info['mac'], info['name'], info['interfaces'[0].mac]
 
     def make_name(group, idxs={}):
         name_templ = "_".join(group.roles)
@@ -481,7 +570,10 @@ def match_nodes(conn, cluster, max_nodes=None):
     compute_nodes = [node_group for node_group in non_c_node_groups
                      if 'compute' in node_group.roles]
 
+    print "compute_nodes: ", compute_nodes
+
     for node_group in compute_nodes:
+        print "Iterate over compute_nodes"
         for _ in range(node_group.num):
             name = make_name(node_group)
             descr = {'roles': node_group.roles,
@@ -523,6 +615,15 @@ def str2ip_range(ip_str):
     ip1, ip2 = ip_str.split("-")
     return [ip1.strip(), ip2.strip()]
 
+#j: bond slaves formatting
+def str2bond_slaves(slv_str):
+    slv1, slv2 = slv_str.split(",")
+    print "!!! slave1, slaves2 are:" , slv1, slv2
+    #str = '[{"name":"' + slv1 + '"},{"name":"' + slv2 + '"}]'
+    str = '[{"name":"eth1"},{"name":"eth0"}]'
+    print "!!! str:" , str
+    return str
+
 
 def get_net_cfg_ref(network_config, network_name):
     for net in network_config['networks']:
@@ -539,6 +640,10 @@ def set_networks_params(cluster, net_settings):
         curr_config['floating_ranges'] = \
             [str2ip_range(net_settings['floating'])]
 
+    #j: fixed VLAN id for Nova network
+    if 'fixed' in net_settings:
+        curr_config['fixed_networks_vlan_start'] = net_settings['fixed']['vlan']
+
     fields = ['net_manager', 'net_l23_provider', 'vlan_range']
 
     for field in fields:
@@ -547,7 +652,15 @@ def set_networks_params(cluster, net_settings):
 
     if 'public' in net_settings:
         pub_settings = net_settings['public']
+
+        print "configuration['networks']", configuration['networks']
+
         for net in configuration['networks']:
+
+            #j detect network ids and save in Cluster object
+            print " net name", net['name'], "!!!net id: ", net["id"]
+            cluster.networks[net['name']] = net['id']
+
             if net['name'] == 'public':
 
                 if 'ip_ranges' in pub_settings:
@@ -559,6 +672,8 @@ def set_networks_params(cluster, net_settings):
 
                 if 'gateway' in pub_settings:
                     net['gateway'] = pub_settings['gateway']
+    #j:
+    print " set_networks_params():  networks[] in cluster: ", cluster.networks
 
     if 'storage' in net_settings:
         if 'vlan' in net_settings['storage']:
@@ -569,12 +684,429 @@ def set_networks_params(cluster, net_settings):
         if 'vlan' in net_settings['management']:
             net = get_net_cfg_ref(configuration, 'management')
             net['vlan_start'] = net_settings['management']['vlan']
+    #j: added as public became tagged with 200 vlan
+    if 'public' in net_settings:
+        if 'vlan' in net_settings['public']:
+            net = get_net_cfg_ref(configuration, 'public')
+            net['vlan_start'] = net_settings['public']['vlan']
 
+    print "!!! NET configuration" , configuration
     cluster.configure_networks(**configuration)
+    #j: check what's configured:
+    configuration = cluster.get_networks()
+    print "new network configuration: ", configuration['networks']
+
+
+#j: configure interfaces
+def set_interface_params(cluster, cluster_desc, node_desc, node):
+
+    print " set_interface_params():  networks[] in cluster: ", cluster.networks #j:
+
+    configuration = cluster.get_interfaces(id = node.id)
+    print " Interfaces config: ", configuration
+    ## In Fuel 7.0 there are "floating" ethxx names of 10Gbps cards
+    #Forming array of 2 such interfaces
+    bond_arr = []
+    admin_arr = []
+    for interface in configuration:
+        if interface['max_speed'] == 10000:
+            print "10GBps found!: ", interface
+            bond_arr.append(interface['name'])
+    print "bond_arr: ", bond_arr
+
+
+    net_configuration = cluster.get_networks()
+    #print 'configuration:', configuration
+    print " 'management' net configuration:", net_configuration['networks'][2] # management
+    print " Node: ", node
+    net_id = net_configuration['networks'][2]["id"]
+    #curr_config = configuration[0]
+
+    compute_macs = ['0c:c4:7a:06:47:ea', '0c:c4:7a:0c:93:08']
+    """
+    if node.mac in compute_macs:
+        print "Compute detected, mac:",node.mac
+        if "bond" in intf_settings:
+            bond_settings = intf_settings['bond']
+            slaves = str2bond_slaves(bond_settings['slaves'])
+            configuration.append({
+                "name": "ovs-bond0",
+                "state": 'null',
+                "mac": 'null',
+                "mode": "lacp-balance-tcp",
+                "slaves": [
+                    {
+                        "name": "eth1"
+                    },
+                    {
+                        "name": "eth0"
+                    }
+                ],
+                "assigned_networks": [],
+                "type": "bond"
+            })
+            print "!!! BOND configuration", configuration
+            print "!!! configuration[4]", configuration[4]
+    """
+
+    #j: net ids
+    public_id = cluster.networks['public']
+    management_id = cluster.networks['management']
+    storage_id = cluster.networks['storage']
+    private_id = cluster.networks.get('private', None)  # there is no private net in GRE but in VLAN
+    fixed_id = cluster.networks.get('fixed', None)  # there is no private net in GRE but in VLAN
+    fuelweb_admin_id = cluster.networks['fuelweb_admin']
+
+    net_provider = cluster_desc.get('net_provider')  # get the cluster type: VLAN, GRE or Nova
+    net_segment_type = cluster_desc.get('net_segment_type')  # get the cluster type: VLAN, GRE or Nova')  # get the cluster type: VLAN, GRE or Nova
+
+    print " net_provider is: ", net_provider
+
+    #fuel release:
+    fuel_info = cluster.get_releases()
+    fuel_ver = fuel_info[0]["version"][-3:]
+    print " fuel version: ", fuel_ver
+    #print " version only: ", fuel_ver[-3:]
+
+    #for every compute change eth0-eth4 settings and ADD bond0 interface
+    ##if "compute" in node_desc['roles']:
+    if "compute" or "controller" in node_desc['roles']:  # now bonding is on all nodes, incl controller
+        #print " Compute detected:", node.id
+        print  node_desc['roles'], "detected"#. node_id
+        #j: change settings for compute
+        for item in configuration:
+            if item['name'] == 'eth0':
+                item['assigned_networks'] = []
+
+            if item['name'] == 'eth1':
+                item['assigned_networks'] = []
+
+            if item['name'] == 'eth2':
+                item['assigned_networks'] = [
+                    {
+                        "id": fuelweb_admin_id,
+                        "name": "fuelweb_admin"
+                    }
+                        ]
+
+        #now append the bonding to eth0 and eth1:
+
+        # Case#1: VLAN 6.0, VAL
+        if fuel_ver == "6.0":
+            #if net_provider == "neutron_vlan":
+            if net_segment_type == "vlan":
+                print "Configuring bond0 as a Fuel6.0, VLAN"
+                configuration.append({
+                        "name": "ovs-bond0",
+                        "state": 'null',
+                        "mac": 'null',
+                        "mode": "lacp-balance-tcp",
+                        "slaves": [
+                            {
+                                "name": "eth1"
+                            },
+                            {
+                                "name": "eth0"
+                            }
+                        ],
+                        "assigned_networks": [
+                            {
+                                "id": private_id,
+                                "name": "private"
+                            },
+                                                {
+                                "id": public_id,
+                                "name": "public"
+                            },
+                            {
+                                "id": management_id,
+                                "name": "management"
+                            },
+                            {
+                                "id": storage_id,
+                                "name": "storage"
+                            }
+
+                        ],
+                        "type": "bond"
+                })
+            #if net_provider == "neutron":
+            if net_segment_type == "gre":
+                print "Configuring bond0 as a Fuel6.0, GRE"
+                configuration.append({
+                        "name": "ovs-bond0",
+                        "state": 'null',
+                        "mac": 'null',
+                        "mode": "lacp-balance-tcp",
+                        "slaves": [
+                            {
+                                "name": "eth1"
+                            },
+                            {
+                                "name": "eth0"
+                            }
+                        ],
+                        "assigned_networks": [
+                            {
+                                "id": public_id,
+                                "name": "public"
+                            },
+                            {
+                                "id": management_id,
+                                "name": "management"
+                            },
+                            {
+                                "id": storage_id,
+                                "name": "storage"
+                            }
+
+                        ],
+                        "type": "bond"
+                })
+
+        # Case#1: VLAN 6.1
+        if fuel_ver == "6.1":
+        #if True:
+            #Case 1.1: VLAN
+            #if net_provider == "neutron_vlan":
+            if net_segment_type == "vlan":
+                print "Configuring bond0 as a Fuel6.1, VLAN"
+                configuration.append({
+                "name": "bond0",
+                "state": "null",
+                "assigned_networks": [
+                            {
+                                "id": private_id,
+                                "name": "private"
+                            },
+                                                {
+                                "id": public_id,
+                                "name": "public"
+                            },
+                            {
+                                "id": management_id,
+                                "name": "management"
+                            },
+                            {
+                                "id": storage_id,
+                                "name": "storage"
+                            }
+                ],
+                "bond_properties": {
+                    "lacp_rate": "slow",
+                    "type__": "linux",
+                    "mode": "802.3ad",
+                    "xmit_hash_policy": "layer2"
+                },
+                "mac": "null",
+                "mode": "802.3ad",
+                "slaves": [
+                    {
+                        "name": "eth1"
+                    },
+                    {
+                        "name": "eth0"
+                    }
+                ],
+                "type": "bond"
+            })
+            #Case 1.2: GRE
+            #if net_provider == "neutron":
+            if net_segment_type == "gre":
+                print "Configuring bond0 as a Fuel6.1, GRE"
+                configuration.append({
+                "name": "bond0",
+                "state": "null",
+                "assigned_networks": [
+                            {
+                                "id": public_id,
+                                "name": "public"
+                            },
+                            {
+                                "id": management_id,
+                                "name": "management"
+                            },
+                            {
+                                "id": storage_id,
+                                "name": "storage"
+                            }
+                ],
+                "bond_properties": {
+                    "lacp_rate": "slow",
+                    "type__": "linux",
+                    "mode": "802.3ad",
+                    "xmit_hash_policy": "layer2"
+                },
+                "mac": "null",
+                "mode": "802.3ad",
+                "slaves": [
+                    {
+                        "name": "eth1"
+                    },
+                    {
+                        "name": "eth0"
+                    }
+                ],
+                "type": "bond"
+            })
+
+        # Case#1.3: Nova
+            if net_provider == "nova_network":
+                print "Configuring bond0 as a Fuel6.1, GRE"
+                configuration.append({
+                "name": "bond0",
+                "state": "null",
+                "assigned_networks": [
+                            {
+                                "id": public_id,
+                                "name": "public"
+                            },
+                            {
+                                "id": management_id,
+                                "name": "management"
+                            },
+                            {
+                                "id": storage_id,
+                                "name": "storage"
+                            },
+                                                        {
+                                "id": fixed_id,
+                                "name": "fixed"
+                            }
+                ],
+                "bond_properties": {
+                    "lacp_rate": "slow",
+                    "type__": "linux",
+                    "mode": "802.3ad",
+                    "xmit_hash_policy": "layer2"
+                },
+                "mac": "null",
+                "mode": "802.3ad",
+                "slaves": [
+                    {
+                        "name": "eth1"
+                    },
+                    {
+                        "name": "eth0"
+                    }
+                ],
+                "type": "bond"
+            })
+
+        ###########################
+        ######   Fuel 7.0 #########
+        ###########################
+
+        # Case#3: VLAN 7.0
+        if fuel_ver == "7.0":
+        #if True:
+            #Case 1.1: VLAN
+            #if net_provider == "neutron_vlan":
+            if net_segment_type == "vlan":
+                print "Configuring bond0 as a Fuel7.0, VLAN"
+                configuration.append({
+                "name": "bond0",
+                "state": "null",
+                "assigned_networks": [
+                            {
+                                "id": private_id,
+                                "name": "private"
+                            },
+                                                {
+                                "id": public_id,
+                                "name": "public"
+                            },
+                            {
+                                "id": management_id,
+                                "name": "management"
+                            },
+                            {
+                                "id": storage_id,
+                                "name": "storage"
+                            }
+                ],
+                "bond_properties": {
+                    "lacp_rate": "slow",
+                    "type__": "linux",
+                    "mode": "802.3ad",
+                    "xmit_hash_policy": "layer2"
+                },
+                "mac": "null",
+                "mode": "802.3ad",
+                "slaves": [
+                    {
+                        "name": "eth1"
+                    },
+                    {
+                        "name": "eth0"
+                    }
+                ],
+                "type": "bond"
+            })
+
+            #Case 3.2: GRE
+            if net_segment_type == "tun":
+                print "Configuring bond0 as a Fuel7.0, GRE"
+                configuration.append({
+                "name": "bond0",
+                "state": "null",
+                "assigned_networks": [
+                            {
+                                "id": public_id,
+                                "name": "public"
+                            },
+                            {
+                                "id": management_id,
+                                "name": "management"
+                            },
+                            {
+                                "id": storage_id,
+                                "name": "storage"
+                            }
+                ],
+                "bond_properties": {
+                    "lacp_rate": "slow",
+                    "type__": "linux",
+                    "mode": "802.3ad",
+                    "xmit_hash_policy": "layer2"
+                },
+                "mac": "null",
+                "mode": "802.3ad",
+                "slaves": [
+                    {
+                        "name": "eth1"
+                    },
+                    {
+                        "name": "eth0"
+                    }
+                ],
+                "type": "bond"
+            })
+
+
+
+
+
+
+        ########## End of Fue;l 7.0 ###########
+
+
+
+    if "controller" in node_desc['roles']:
+        print " Controller detected: id", node.id
+
+
+    print " Interfaces new configuration: ", configuration
+    ##cluster.configure_interfaces(configuration, id = node.id)  # temp comment
+    #cluster.prest.PUT('api/nodes/' + node.id + '/interfaces')
+
 
 
 def create_cluster(conn, cluster):
     nodes_iter = match_nodes(conn, cluster['nodes'])
+
+    #j:
+    #return # temporary: to let cluster assembly to fail fast
 
     use_ceph = False
 
@@ -590,6 +1122,8 @@ def create_cluster(conn, cluster):
         logger.info("Will use ceph as storage")
 
     logger.info("Creating empty cluster")
+    #j:
+    print "Creating empty cluster"
     cluster_obj = create_empty_cluster(conn, cluster,
                                        use_ceph=use_ceph)
 
@@ -598,13 +1132,26 @@ def create_cluster(conn, cluster):
             logger.info("Setting network parameters")
             set_networks_params(cluster_obj, cluster['network'])
 
+
         for node_desc, node in nodes_iter:
+            #j:
+            print " node_desc: ", node_desc, node
             node.set_node_name(node_desc['name'])
             templ = "Adding node {} with roles {}"
 
             logger.info(templ.format(node.name, ",".join(node_desc['roles'])))
-
+            """
+            #j: customize interfaces for every node:
+            print "!!! Calling set_interface_params()"
+            set_interface_params(cluster_obj, cluster['interfaces'], node_desc, node)
+            print "!!! Finished set_interface_params()"
+            """
             cluster_obj.add_node(node, node_desc['roles'])
+
+             #j: customize interfaces for every node:
+            print "!!! Calling set_interface_params()"
+            set_interface_params(cluster_obj, cluster, node_desc, node)
+            print "!!! Finished set_interface_params()"
     except:
         cluster_obj.delete()
         raise
@@ -673,6 +1220,7 @@ def main(argv=None):
     fuel = FuelInfo(conn)
 
     for cluster_obj in fuel.clusters:
+        print "cluster['name']:", cluster['name']
         if cluster_obj.name == cluster['name']:
             cluster_obj.delete()
             wd = with_timeout(60, "Wait cluster deleted")
@@ -680,7 +1228,9 @@ def main(argv=None):
 
     c = create_cluster(conn, cluster)
     c.start_deploy()
-    c.wait_operational(60*60*60*1000)
+    #j:
+    #c.wait_operational(60*60*60*1000) # original
+    c.wait_operational(60*60*60*3000)
 
     nodes = [node for node in c.nodes]
 
