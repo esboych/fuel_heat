@@ -273,8 +273,6 @@ class Cluster(prest.PRestBase):
         #j: add Node
         print "Adding Node #", node.id, ",roles: ", roles, "mac", node.mac
 
-        controller_macs = ['0c:c4:7a:03:c8:3a']
-
         data = {}
         data['pending_roles'] = roles
         data['cluster_id'] = self.id
@@ -1194,6 +1192,10 @@ def parse_command_line(argv):
                         help='allow debug logging',
                         action="store_true")
 
+    parser.add_argument('-n', '--no-deploy',
+                        help='doesn\'t deploy cluster',
+                        dest='nodeploy')
+
     return parser.parse_args(argv[1:])
 
 
@@ -1227,10 +1229,11 @@ def main(argv=None):
             wd(lambda co: not co.check_exists())(cluster_obj)
 
     c = create_cluster(conn, cluster)
-    c.start_deploy()
-    #j:
-    #c.wait_operational(60*60*60*1000) # original
-    c.wait_operational(60*60*60*3000)
+    if not args.nodeploy:
+        c.start_deploy()
+        #j:
+        #c.wait_operational(60*60*60*1000) # original
+        c.wait_operational(60*60*60*3000)
 
     nodes = [node for node in c.nodes]
 
