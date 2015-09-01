@@ -15,6 +15,6 @@ $ source venv/bin/activate
 
 $ pip install -r requirements.txt
 
--Now launch: tenant/login, Master node IP, config file
+- Now launch: tenant/login, Master node IP, config file
 
 $ python fuel_heat.py -a admin:admin:admin -u http://172.16.52.112:8000 config_GRE_Perf1_7.yaml
