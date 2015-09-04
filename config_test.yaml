@@ -1,0 +1,50 @@
+name: perf-3
+deployment_mode: ha_compact
+net_provider: neutron
+net_segment_type: vlan
+libvirt_type: kvm
+release: "2"
+
+network:
+    public:
+        ip_ranges: 172.16.53.130 - 172.16.53.144
+        cidr: 172.16.53.128/26
+        gateway: 172.16.53.129
+        vlan: 303
+    management:
+        vlan: 301
+    storage:
+        vlan: 302
+
+    vlan_range: [305, 319]
+
+    floating: 172.16.53.145 - 172.16.53.159
+    net_l23_provider: ovs
+
+nodes:
+    "0c:c4:7a:20:12:94":
+        name: cz7564
+        role: controller
+        eth0:
+            - fuelweb_admin
+            - management
+            - private
+        eth2:
+            - storage
+        eth3:
+            - public
+
+    "00:25:90:47:7d:0c":
+        name: cz7573
+        role: cinder
+        eth1:
+            - fuelweb_admin
+            - management
+            - private
+        eth2:
+            - storage
+        eth3:
+            - public
+
+
+max_nodes: 6

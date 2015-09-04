@@ -241,6 +241,9 @@ class Cluster(prest.PRestBase):
     configure_interfaces = prest.PUT(
         'api/nodes/{id}/interfaces')
 
+    get_disks = prest.GET('/api/nodes/{id}/disks')
+    update_disks = prest.PUT('/api/nodes/{id}/disks')
+
     _get_nodes = prest.GET('api/nodes?cluster_id={id}')
 
     def __init__(self, *dt, **mp):
@@ -270,17 +273,11 @@ class Cluster(prest.PRestBase):
         :param interfaces: mapping iface name to networks
         """
 
-        #j: add Node
-        print "Adding Node #", node.id, ",roles: ", roles, "mac", node.mac
-
         data = {}
         data['pending_roles'] = roles
         data['cluster_id'] = self.id
         data['id'] = node.id
         data['pending_addition'] = True
-
-        if logger is not None:
-            logger.debug("Adding node %s to cluster..." % node.id)
 
         self.add_node_call([data])
         self.nodes.append(node)
@@ -397,26 +394,26 @@ def create_empty_cluster(conn, cluster_desc,
         data['net_segment_type'] = net_segment_type
 
     #j: check what sent to api/clusters:
-    print "POST api/clusters:", data
+    logger.debug("POST api/clusters:", data)
 
     params = conn.post(path='/api/clusters', params=data)
     cluster = Cluster(conn, **params)
 
     #j: check what response api/clusters:
-    print "POST api/clusters response:", params
+    logger.debug("POST api/clusters response:", params)
 
     attributes = cluster.get_attributes()
-    print "Attributes are:", attributes
+    logger.debug("Attributes are:", attributes)
 
     ed_attrs = attributes['editable']
-    print "Attributes edited 1"
+    logger.debug("Attributes edited 1")
 
     ed_attrs['common']['libvirt_type']['value'] = \
         cluster_desc.get('libvirt_type', 'kvm')
-    print "Attributes edited 2"
+    logger.debug("Attributes edited 2")
 
     #j: define provision type: "image"(IBP) or "cobbler"(Classic)
-    print "Provision type is:", cluster_desc.get('provision')
+    logger.debug("Provision type is:", cluster_desc.get('provision'))
     #ed_attrs['provision']['method']['value'] = cluster_desc.get('provision') #27.08.2015 helped but?? neede to explore
 
 
@@ -435,50 +432,25 @@ def create_empty_cluster(conn, cluster_desc,
                     val['value'] = True
                 else:
                     val['value'] = False
-    print "Setting attributes"
+    logger.debug("Setting attributes")
     cluster.set_attributes(attributes)
-    print "Setting attributes done"
-    print "New config data is:", cluster.get_attributes()
+    logger.debug("Setting attributes done")
+    logger.debug("New config data is:", cluster.get_attributes())
 
     return cluster
 
 
 NodeGroup = collections.namedtuple('Node', ['roles', 'num', 'num_modif'])
-RawNodeInfo = collections.namedtuple('RawNodeInfo', ['cpu', 'disk', 'mac', 'node']) #j: added 'mac' parameter
+RawNodeInfo = collections.namedtuple('RawNodeInfo', ['cpu', 'disk', 'ram', 'mac', 'node']) #j: added 'mac' parameter
 
 
 def match_nodes(conn, cluster, max_nodes=None):
-    node_groups = []
 
-    for node_group in cluster:
-        #j:
-        print " match_nodes(conn, cluster, max_nodes=None), node group:", node_group
-        rroles, rcount = node_group.split(",")
-
-        rroles = rroles.strip()
-        rcount = rcount.strip()
-
-        roles = [role.strip() for role in rroles.split('+')]
-
-        if rcount.endswith("+"):
-            node_groups.append(NodeGroup(roles, int(rcount[:-1]), '+'))
-        else:
-            node_groups.append(NodeGroup(roles, int(rcount), None))
-
-    min_nodes = sum(node_group.num for node_group in node_groups)
-
-    if max_nodes is not None and max_nodes < min_nodes:
-        templ = "max_nodes ({0!r}) < min_nodes ({1!r})"
-        raise ValueError(templ.format(max_nodes, min_nodes))
-
-    for node_group in node_groups:
-        logger.info("Node : {0}".format(node_group))
-
-    controller_only = sum(node_group.num for node_group in node_groups
-                          if ['controller'] == node_group.roles)
-
-    #j:
-    print " controller_only:", controller_only
+    logger.info(str(cluster))
+    for node_mac in cluster:
+        logger.info(node_mac)
+    min_nodes = len(cluster)
+    logger.info(min_nodes)
 
     while True:
         raw_nodes = [raw_node for raw_node in get_all_nodes(conn)
@@ -491,122 +463,23 @@ def match_nodes(conn, cluster, max_nodes=None):
             continue
         break
 
-    #j:
-    print " raw nodes:" , conn.get('api/nodes')
-
     if len(raw_nodes) <= 1:
         raise ValueError("Nodes amount should be not less, than 2")
 
-    cpu_disk = []
     for raw_node in raw_nodes:
         info = raw_node.get_info()
 
         #j:
-        print "raw node info, Mac:", info['mac'], ", Name: ", info['name'], "Interfaces:", info['meta']['interfaces'][0]
+#        print
 
-        cpu_count = int(info['meta']['cpu']['real'])
         mac = str(info['mac'])
-        disk_size = 0
 
-        for disk in info['meta']['disks']:
-            disk_size += int(disk['size'])
+        if mac in cluster:
+            templ = "Matched node. MAC: {}, Name: {}"
+            logger.info(templ.format(info['mac'], info['name']))
+            node_description = cluster[mac]
+            yield (node_description, raw_node)
 
-        cpu_disk.append(RawNodeInfo(cpu_count, disk_size, mac, raw_node))
-
-    cpu_disk.sort()
-
-    #j:
-    print "cpu_disk", cpu_disk
-
-    # least performant node - controllers
-    """
-    for idx, node_info in enumerate(cpu_disk[:controller_only]):
-        print "idx, node_info:", idx, node_info   #j
-        descr = {'roles': ["controller"],
-                 'name': "controller_{}".format(idx)}
-        yield (descr, node_info.node)
-        """
-
-    #j: list with Controllers only:
-    ctrlr_cpu_disk = [node_info for node_info in cpu_disk
-        #if node_info.mac == '00:50:56:92:18:cb'] #vEnv1.1
-        #if node_info.mac == '0c:c4:7a:03:c8:3a'] #Perf2
-        if node_info.mac == '0c:c4:7a:0c:92:f6'] #Perf1
-
-    #j: list without Controllers -> only Computes:
-    cpu_disk = [node_info for node_info in cpu_disk
-        #if node_info.mac != '00:50:56:92:18:cb']  #vEnv1.1
-        #if node_info.mac != '0c:c4:7a:03:c8:3a'] #Perf2
-        if node_info.mac != '0c:c4:7a:0c:92:f6'] #Perf1
-
-    print "ctrlr_cpu_disk", ctrlr_cpu_disk #j:
-
-    for idx, node_info in enumerate(ctrlr_cpu_disk):
-        #print "idx, node_info:", idx, node_info   #j
-        descr = {'roles': ["controller"],
-                 'name': "controller_{}".format(idx)}
-        yield (descr, node_info.node)
-
-    #cpu_disk = cpu_disk[controller_only:]  #j: will break the logic
-    non_c_node_groups = [node_group for node_group in node_groups
-                         if ['controller'] != node_group.roles]
-
-    #j:
-    print " non_c_node_groups:", non_c_node_groups
-
-
-    #j: to interrupt Cluster completeion
-    print "raw node info: break!!", info
-    #print "raw node info, mac:", info['mac'], info['name'], info['interfaces'[0].mac]
-
-    def make_name(group, idxs={}):
-        name_templ = "_".join(group.roles)
-        idx = idxs.get(name_templ, 0)
-        idxs[name_templ] = idx + 1
-        return "{0}_{1}".format(name_templ, idx)
-
-    compute_nodes = [node_group for node_group in non_c_node_groups
-                     if 'compute' in node_group.roles]
-
-    print "compute_nodes: ", compute_nodes
-
-    for node_group in compute_nodes:
-        print "Iterate over compute_nodes"
-        for _ in range(node_group.num):
-            name = make_name(node_group)
-            descr = {'roles': node_group.roles,
-                     'name': name}
-            yield (descr, cpu_disk.pop().node)
-
-    data_nodes = [node_group for node_group in non_c_node_groups
-                  if 'compute' not in node_group.roles]
-
-    for node_group in data_nodes:
-        for _ in range(node_group.num):
-            name = make_name(node_group)
-            descr = {'roles': node_group.roles,
-                     'name': name}
-            yield (descr, cpu_disk.pop().node)
-
-    strechable_node_groups = [node_group for node_group in node_groups
-                              if node_group.num_modif == '+']
-
-    if len(strechable_node_groups) != 0:
-        cycle_over = enumerate(itertools.cycle(strechable_node_groups),
-                               min_nodes)
-
-        nums = {id(node_group): node_group.num
-                for node_group in strechable_node_groups}
-
-        for selected_nodes, node_group in cycle_over:
-            if cpu_disk == [] or selected_nodes == max_nodes:
-                break
-
-            name = make_name(node_group, nums)
-            nums[id(node_group)] += 1
-            descr = {'roles': node_group.roles,
-                     'name': name}
-            yield (descr, cpu_disk.pop().node)
 
 
 def str2ip_range(ip_str):
@@ -616,10 +489,10 @@ def str2ip_range(ip_str):
 #j: bond slaves formatting
 def str2bond_slaves(slv_str):
     slv1, slv2 = slv_str.split(",")
-    print "!!! slave1, slaves2 are:" , slv1, slv2
+    logger.debug("!!! slave1, slaves2 are:" , slv1, slv2)
     #str = '[{"name":"' + slv1 + '"},{"name":"' + slv2 + '"}]'
     str = '[{"name":"eth1"},{"name":"eth0"}]'
-    print "!!! str:" , str
+    logger.debug("!!! str:" , str)
     return str
 
 
@@ -651,12 +524,12 @@ def set_networks_params(cluster, net_settings):
     if 'public' in net_settings:
         pub_settings = net_settings['public']
 
-        print "configuration['networks']", configuration['networks']
+        logger.debug("configuration['networks']", configuration['networks'])
 
         for net in configuration['networks']:
 
             #j detect network ids and save in Cluster object
-            print " net name", net['name'], "!!!net id: ", net["id"]
+            logger.debug(" net name", net['name'], "!!!net id: ", net["id"])
             cluster.networks[net['name']] = net['id']
 
             if net['name'] == 'public':
@@ -671,7 +544,7 @@ def set_networks_params(cluster, net_settings):
                 if 'gateway' in pub_settings:
                     net['gateway'] = pub_settings['gateway']
     #j:
-    print " set_networks_params():  networks[] in cluster: ", cluster.networks
+    logger.debug(" set_networks_params():  networks[] in cluster: ", cluster.networks)
 
     if 'storage' in net_settings:
         if 'vlan' in net_settings['storage']:
@@ -688,29 +561,60 @@ def set_networks_params(cluster, net_settings):
             net = get_net_cfg_ref(configuration, 'public')
             net['vlan_start'] = net_settings['public']['vlan']
 
-    print "!!! NET configuration" , configuration
+    logger.debug("!!! NET configuration" , configuration)
     cluster.configure_networks(**configuration)
     #j: check what's configured:
     configuration = cluster.get_networks()
-    print "new network configuration: ", configuration['networks']
+    logger.debug("new network configuration: ", configuration['networks'])
 
 
 #j: configure interfaces
-def set_interface_params(cluster, cluster_desc, node_desc, node):
+def set_interface_params(cluster, node_desc, node):
 
-    print " set_interface_params():  networks[] in cluster: ", cluster.networks #j:
+    #j: net ids
+    network_ids = {
+        "public": cluster.networks['public'],
+        "management": cluster.networks['management'],
+        "storage": cluster.networks['storage'],
+        "private": cluster.networks.get('private', None),
+        "fixed": cluster.networks.get('fixed', None),
+        "fuelweb_admin": cluster.networks['fuelweb_admin']
+    }
 
     configuration = cluster.get_interfaces(id = node.id)
-    print " Interfaces config: ", configuration
+
+    for interface in configuration:
+        iname = interface['name']
+        templ = "Interface name: {}\n Interface dump: {}"
+        logger.info(templ.format(iname, interface))
+        if iname in node_desc:
+            networks = node_desc[iname]
+            templ = "networks_config: {}"
+            logger.info(templ.format(networks))
+            interface['assigned_networks'] = map(lambda x:dict(id=network_ids[x], name=x), networks)
+            templ = "map_assigned_networks: {}"
+            logger.info(templ.format(interface['assigned_networks']))
+        else:
+            interface['assigned_networks'] = []
+
+
+        templ = "Node {} Interface {}, speed {} Mbps"
+        logger.info(templ.format(node_desc['name'], interface['name'], interface['max_speed']))
+
+    cluster.configure_interfaces(configuration, id = node.id)
+
+#    print " Interfaces config: ", configuration
+
+'''
     ## In Fuel 7.0 there are "floating" ethxx names of 10Gbps cards
     #Forming array of 2 such interfaces
     bond_arr = []
     admin_arr = []
     for interface in configuration:
         if interface['max_speed'] == 10000:
-            print "10GBps found!: ", interface
+ #           print "10GBps found!: ", interface
             bond_arr.append(interface['name'])
-    print "bond_arr: ", bond_arr
+#    print "bond_arr: ", bond_arr
 
 
     net_configuration = cluster.get_networks()
@@ -1097,7 +1001,12 @@ def set_interface_params(cluster, cluster_desc, node_desc, node):
     print " Interfaces new configuration: ", configuration
     ##cluster.configure_interfaces(configuration, id = node.id)  # temp comment
     #cluster.prest.PUT('api/nodes/' + node.id + '/interfaces')
+'''
 
+def configure_disks(cluster, node_desc, node):
+    configuration = cluster.get_disks(id=node.id)
+    templ = "Disk info: {}"
+    logger.info(templ.format(configuration))
 
 
 def create_cluster(conn, cluster):
@@ -1109,19 +1018,21 @@ def create_cluster(conn, cluster):
     use_ceph = False
 
     if 'nodes' in cluster:
-        for node_group in cluster['nodes']:
-            if 'ceph-osd' in node_group:
+        for node in cluster['nodes']:
+            if cluster['nodes'][node]['role'] == 'ceph-osd':
                 use_ceph = True
+                break
 
     if cluster.get('storage_type', None) == 'ceph':
         use_ceph = True
 
     if use_ceph:
-        logger.info("Will use ceph as storage")
+        logger.info("Storage type: ceph")
+    else:
+        logger.info("Storage type: cinder")
 
     logger.info("Creating empty cluster")
-    #j:
-    print "Creating empty cluster"
+
     cluster_obj = create_empty_cluster(conn, cluster,
                                        use_ceph=use_ceph)
 
@@ -1131,30 +1042,26 @@ def create_cluster(conn, cluster):
             set_networks_params(cluster_obj, cluster['network'])
 
 
-        for node_desc, node in nodes_iter:
+        for node_description, node in nodes_iter:
             #j:
-            print " node_desc: ", node_desc, node
-            node.set_node_name(node_desc['name'])
-            templ = "Adding node {} with roles {}"
+            logger.debug(" node_desc: ", node_description, node)
+            node.set_node_name(node_description['name'])
+            templ = "Adding node {} with role {}"
 
-            logger.info(templ.format(node.name, ",".join(node_desc['roles'])))
-            """
-            #j: customize interfaces for every node:
-            print "!!! Calling set_interface_params()"
-            set_interface_params(cluster_obj, cluster['interfaces'], node_desc, node)
-            print "!!! Finished set_interface_params()"
-            """
-            cluster_obj.add_node(node, node_desc['roles'])
+            logger.info(templ.format(node.name, node_description['role']))
 
-             #j: customize interfaces for every node:
-            print "!!! Calling set_interface_params()"
-            set_interface_params(cluster_obj, cluster, node_desc, node)
-            print "!!! Finished set_interface_params()"
+            cluster_obj.add_node(node, [node_description['role']])
+
+            set_interface_params(cluster_obj, node_description, node)
+            configure_disks(cluster_obj, node_description, node)
+
+
     except:
         cluster_obj.delete()
         raise
 
     return cluster_obj
+
 
 
 def login(fuel_url, creds):
@@ -1194,6 +1101,7 @@ def parse_command_line(argv):
 
     parser.add_argument('-n', '--no-deploy',
                         help='doesn\'t deploy cluster',
+                        action="store_true",
                         dest='nodeploy')
 
     return parser.parse_args(argv[1:])
@@ -1205,16 +1113,21 @@ def main(argv=None):
 
     args = parse_command_line(argv)
 
+    ch = logging.StreamHandler()
+    logger.setLevel(logging.INFO)
+    ch.setLevel(logging.INFO)
     if args.debug:
         logger.setLevel(logging.DEBUG)
-        ch = logging.StreamHandler()
         ch.setLevel(logging.DEBUG)
-        logger.addHandler(ch)
 
-        log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-        formatter = logging.Formatter(log_format,
-                                      "%H:%M:%S")
-        ch.setFormatter(formatter)
+    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    formatter = logging.Formatter(log_format, "%H:%M:%S")
+    ch.setFormatter(formatter)
+
+    logger.addHandler(ch)
+
+#    fh = logging.FileHandler("log.txt")
+#    fh.setLevel()
 
     conn = login(args.fuelurl, args.auth)
     cluster = yaml.load(open(args.config_file).read())
@@ -1222,19 +1135,22 @@ def main(argv=None):
     fuel = FuelInfo(conn)
 
     for cluster_obj in fuel.clusters:
-        print "cluster['name']:", cluster['name']
+        logger.debug("cluster['name']:", cluster['name'])
         if cluster_obj.name == cluster['name']:
             cluster_obj.delete()
             wd = with_timeout(60, "Wait cluster deleted")
             wd(lambda co: not co.check_exists())(cluster_obj)
 
     c = create_cluster(conn, cluster)
-    if not args.nodeploy:
+
+    if args.nodeploy == False:
         c.start_deploy()
         #j:
         #c.wait_operational(60*60*60*1000) # original
         c.wait_operational(60*60*60*3000)
 
+    return 0
+'''
     nodes = [node for node in c.nodes]
 
     for i in range(len(nodes)):
@@ -1247,8 +1163,7 @@ def main(argv=None):
         else:
             print value
             node.update_disk_volumes(value)
-
-    return 0
+'''
 
 
 if __name__ == "__main__":
