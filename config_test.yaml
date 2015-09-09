@@ -25,26 +25,33 @@ nodes:
     "0c:c4:7a:20:12:94":
         name: cz7564
         role: controller
-        eth0:
-            - fuelweb_admin
-            - management
-            - private
-        eth2:
-            - storage
-        eth3:
-            - public
+        interfaces:
+            eth0:
+                - fuelweb_admin
+                - management
+                - private
+            eth2:
+                - storage
+            eth3:
+                - public
 
     "00:25:90:47:7d:0c":
         name: cz7573
         role: cinder
-        eth1:
-            - fuelweb_admin
-            - management
-            - private
-        eth2:
-            - storage
-        eth3:
-            - public
+        interfaces:
+            eth1:
+                - fuelweb_admin
+                - management
+                - private
+            eth2:
+                - storage
+            eth3:
+                - public
+        disks:
+            sda:
+                os: 67584
+            sdi:
+
 
 
 max_nodes: 6

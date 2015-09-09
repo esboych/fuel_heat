@@ -586,9 +586,9 @@ def set_interface_params(cluster, node_desc, node):
     for interface in configuration:
         iname = interface['name']
         templ = "Interface name: {}\n Interface dump: {}"
-        logger.info(templ.format(iname, interface))
-        if iname in node_desc:
-            networks = node_desc[iname]
+        logger.debug(templ.format(iname, interface))
+        if iname in node_desc['interfaces']:
+            networks = node_desc['interfaces'][iname]
             templ = "networks_config: {}"
             logger.info(templ.format(networks))
             interface['assigned_networks'] = map(lambda x:dict(id=network_ids[x], name=x), networks)
@@ -1007,6 +1007,30 @@ def configure_disks(cluster, node_desc, node):
     configuration = cluster.get_disks(id=node.id)
     templ = "Disk info: {}"
     logger.info(templ.format(configuration))
+
+    if 'disks' not in node_desc:
+        logger.info("Target disk config is empty. Nothing to configure.")
+        return
+
+    target_disks = node_desc['disks']
+    templ = "Target disk configuration: {}"
+    logger.info(templ.format(target_disks))
+
+    for disk in configuration:
+        if disk['name'] in target_disks:
+            templ = "Disk configuration before: {}"
+            logger.info(templ.format(disk))
+            target_volumes = target_disks[disk['name']]
+            for volume in disk['volumes']:
+                if target_volumes != None and volume['name'] in target_volumes:
+                    volume['size'] = target_volumes[volume['name']]
+                else:
+                    volume['size'] = 0
+            templ = "Disk configuration after: {}"
+            logger.info(templ.format(disk))
+
+
+    cluster.update_disks(configuration, id=node.id)
 
 
 def create_cluster(conn, cluster):
