@@ -420,7 +420,7 @@ def create_empty_cluster(conn, cluster_desc,
     if use_ceph:
         opts = ['ephemeral_ceph', 'images_ceph', 'images_vcenter']
         opts += ['iser', 'objects_ceph', 'volumes_ceph']
-        opts += ['volumes_lvm', 'volumes_vmdk']
+        opts += ['volumes_lvm']
 
         for name in opts:
             val = ed_attrs['storage'][name]
@@ -432,6 +432,7 @@ def create_empty_cluster(conn, cluster_desc,
                     val['value'] = True
                 else:
                     val['value'] = False
+
     logger.debug("Setting attributes")
     cluster.set_attributes(attributes)
     logger.debug("Setting attributes done")

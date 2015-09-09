@@ -1,0 +1,119 @@
+name: perf-3
+deployment_mode: ha_compact
+net_provider: neutron
+net_segment_type: vlan
+libvirt_type: kvm
+release: "2"
+
+network:
+    public:
+        ip_ranges: 172.16.53.130 - 172.16.53.144
+        cidr: 172.16.53.128/26
+        gateway: 172.16.53.129
+        vlan: 303
+    management:
+        vlan: 301
+    storage:
+        vlan: 302
+
+    vlan_range: [305, 319]
+
+    floating: 172.16.53.145 - 172.16.53.159
+    net_l23_provider: ovs
+
+nodes:
+    "0c:c4:7a:20:12:94":
+        name: cz7564
+        role: controller
+        interfaces:
+            eth0:
+                - fuelweb_admin
+                - management
+                - private
+            eth2:
+                - storage
+            eth3:
+                - public
+
+
+    "00:25:90:54:08:e8":
+        name: cz7571
+        role: compute
+        interfaces:
+            eth0:
+                - fuelweb_admin
+                - management
+                - private
+            eth2:
+                - storage
+            eth3:
+                - public
+
+    "00:25:90:06:1a:00":
+        name: cz7572
+        role: compute
+        interfaces:
+            eth0:
+                - storage
+            eth1:
+                - public
+            eth2:
+                - fuelweb_admin
+                - management
+                - private
+
+    "00:25:90:47:7d:0c":
+        name: cz7573
+        role: ceph-osd
+        interfaces:
+            eth1:
+                - fuelweb_admin
+                - management
+                - private
+            eth2:
+                - storage
+            eth3:
+                - public
+        disks:
+            sda:
+                os: 67584
+            sdi:
+                cephjournal: 228372
+
+    "00:25:90:47:7e:70":
+        name: cz7574
+        role: ceph-osd
+        interfaces:
+            eth1:
+                - fuelweb_admin
+                - management
+                - private
+            eth2:
+                - storage
+            eth3:
+                - public
+        disks:
+            sda:
+                os: 67584
+            sdi:
+                cephjournal: 228372
+
+    "00:25:90:47:74:28":
+        name: cz7575
+        role: ceph-osd
+        interfaces:
+            eth1:
+                - fuelweb_admin
+                - management
+                - private
+            eth2:
+                - storage
+            eth3:
+                - public
+        disks:
+            sda:
+                os: 67584
+            sdi:
+                cephjournal: 228372
+
+max_nodes: 6
